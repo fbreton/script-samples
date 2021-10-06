@@ -2,40 +2,62 @@
 
 usage()
 {
-    echo "Usage: vul-per-host.sh [ -j | --json | -c | --csv | -h | --help]
-        -j | --json:  json output format
-        -c | --csv:   csv output format
-        -h | --help:  help"
+    echo "Usage: vul-per-host.sh [ hostname1] ... [hostnameN]
+Flags:
+    -j | --json   json output format
+    -c | --csv    csv output format
+    -e | --extip  show only host with external Ip
+    -p  string    switch between profiles configured at ~/.lacework.toml
+    -h | --help   help"
     exit 2
 }
 
-if [ -z "$1" ]; then
-  format="human"
-else
+profile=""
+format="human"
+hostnamelist=()
+ExternalIp=0
+lwcmd="lacework"
+
+while [ ! -z "$1" ]; do
   case "$1" in
-    -j | --json)  format="json" ;;
-    -c | --csv)   format="csv" ;;
-    -h | --help)  usage; exit 1 ;;
-    *) echo "Unexpected option: $1"
-       usage ;;
+    -j | --json)  [ $format = "human" ] && format="json" || usage; shift ;;
+    -c | --csv)   [ $format = "human" ] && format="csv" || usage; shift ;;
+    -e | --extip) ExternalIp=1; shift ;;
+    -p) shift; profile=$1; lwcmd="lacework -p $1"; shift ;;
+    -h | --help | -*)  usage ;;
+    *) hostnamelist+=($1); shift ;;
   esac
-fi
+done
+
+eval "$lwcmd version >/dev/null 2>/dev/null" || {
+  echo "ERROR The profile '$profile' could not be found.
+Try running 'lacework configure --profile profile'."
+  exit 2
+}
 
 temp="tmpfile.$$"
+err="err.$$"
 length_host=0
 length_cve=0
 length_fix=0
+output=""
 
-lacework vulnerability host list-cves --active --fixable --json |jq -r '.[] | select((.packages[].status == "Active") or (.packages[].status == "Reopened")) | .cve_id + " " + .packages[0].fixed_version' | while read cve fix
+eval "$lwcmd vulnerability host list-cves --active --fixable --json" | {jq -r '.[] | select((.packages[].status == "Active") or (.packages[].status == "Reopened")) | .cve_id + " " + .packages[0].fixed_version' 2>$err} | while read cve fix
 do
-  lacework vulnerability host list-hosts $cve --online --json | jq -r '.[] |.host.hostname' | while read hostname
+  eval "$lwcmd vulnerability host list-hosts $cve --online --json" | jq -r '.[] |.host.hostname + " " + .host.tags.ExternalIp' | while read hostname extip
     do
-      echo "$hostname $cve $fix" >>$temp
+      [ $ExternalIp -eq 0 -o ! -z $extip ] && [ ${#hostnamelist} -eq 0 -o ${hostnamelist[(Ie)$hostname]} -gt 0 ] && echo "$hostname $cve $fix" >>$temp
       (( ${#hostname} > $length_host )) && length_host=${#hostname}
     done
   (( ${#cve} > $length_cve )) && length_cve=${#cve}
   (( ${#fix} > $length_fix )) && length_fix=${#fix}
 done
+
+[ -s "$err" ] && {
+  eval "$lwcmd vulnerability host list-cves --active --fixable"
+  rm $err
+  exit 1
+}
 
 a="| Host Name"
 b="| CVE ID"
@@ -63,9 +85,8 @@ do
             
     csv)    if [ -z "$aux" ]; then
                 echo "hostname,cve_id,fixed_version"
-            else
-                echo "$hostname,$cve,$fix"
-            fi ;;
+            fi
+            echo "$hostname,$cve,$fix" ;;
             
     human)  if [ -z "$aux" ]; then
               echo $a$b$c"|"
@@ -74,14 +95,14 @@ do
               b="${(r:$length_cve+1:)b}";b=${b// /-}
               c="${(r:$length_fix+1:)c}";c=${c// /-}
               echo $a$b$c"+"
-            else
-              hostname="|${(r:$length_host:)hostname}"
-              cve="|${(r:$length_cve:)cve}"
-              fix="|${(r:$length_fix:)fix}|"
-              echo $hostname$cve$fix
-            fi ;;
+            fi
+            hostname="|${(r:$length_host:)hostname}"
+            cve="|${(r:$length_cve:)cve}"
+            fix="|${(r:$length_fix:)fix}|"
+            echo $hostname$cve$fix ;;
   esac
   aux=$hostname
 done
 [ $format = "json" ] && echo "\n    ]\n  }\n]"
-rm $temp
+rm $temp 2>/dev/null
+rm $err 2>/dev/null
