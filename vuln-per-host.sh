@@ -43,17 +43,19 @@ err="err.$$"
 length_host=0
 length_cve=0
 length_fix=0
+length_pkg=0
 output=""
 
-eval "$lwcmd vulnerability host list-cves $active --fixable --json" | {jq -r '.[] | select((.packages[].status == "Active") or (.packages[].status == "Reopened")) | .cve_id + " " + .packages[0].fixed_version' 2>$err} | while read cve fix
+eval "$lwcmd vulnerability host list-cves $active --fixable --json" | {jq -r '.[] | select((.packages[].status == "Active") or (.packages[].status == "Reopened")) | .cve_id' 2>$err} | while read cve
 do
-  eval "$lwcmd vulnerability host list-hosts $cve --online --json" | jq -r '.[] |.host.hostname + " " + .host.tags.ExternalIp' | while read hostname extip
+  eval "$lwcmd vulnerability host list-hosts $cve --online --json" | jq -r '.[] |.host.hostname + " " + .host.tags.ExternalIp + " " + .packages[0].name + " " + .packages[0].fixed_version' | while read hostname extip pkgname fix
     do
-      [ $ExternalIp -eq 0 -o ! -z $extip ] && [ ${#hostnamelist} -eq 0 -o ${hostnamelist[(Ie)$hostname]} -gt 0 ] && echo "$hostname $cve $fix" >>$temp
+      [ $ExternalIp -eq 0 -o ! -z $extip ] && [ ${#hostnamelist} -eq 0 -o ${hostnamelist[(Ie)$hostname]} -gt 0 ] && echo "$hostname $cve $pkgname $fix" >>$temp
       (( ${#hostname} > $length_host )) && length_host=${#hostname}
     done
   (( ${#cve} > $length_cve )) && length_cve=${#cve}
   (( ${#fix} > $length_fix )) && length_fix=${#fix}
+  (( ${#pkgname} > $length_pkg )) && length_pkg=${#pkgname}
 done
 
 [ -s "$err" ] && {
@@ -64,47 +66,56 @@ done
 
 a="| Host Name"
 b="| CVE ID"
-c="| Fixed version"
+c="| Package name"
+d="| Fixed version"
 
 (( (${#a}-1) > $length_host )) && ((length_host = ${#a}-1))
 (( (${#b}-1) > $length_cve )) && ((length_cve = ${#b}-1))
-(( (${#c}-1) > $length_fix )) && ((length_fix = ${#c}-1))
+(( (${#c}-1) > $length_pkg )) && ((length_pkg = ${#c}-1))
+(( (${#d}-1) > $length_fix )) && ((length_fix = ${#d}-1))
 
 a="${(r:$length_host+1:)a}"
 b="${(r:$length_cve+1:)b}"
-c="${(r:$length_fix+1:)c}"
+c="${(r:$length_pkg+1:)c}"
+d="${(r:$length_fix+1:)d}"
 
 aux=""
-sort $temp | while read hostname cve fix
+previous=""
+
+sort $temp | while read hostname cve pkgname fix
 do
-  case $format in
+  key=$hostname$cve$pkgname
+  [ "$previous" != "$key" ] && case $format in
     json)   if [ -z "$aux" ]; then
-                echo "[\n  {\n    hostname: \"$hostname\",\n    cve_list: [\n      {\n        cve_id: \"$cve\"\n        fixed_version: \"$fix\"\n      }\c"
-            elif [ $aux == $hostname ]; then
-                echo ",\n      {\n        cve_id: \"$cve\"\n        fixed_version: \"$fix\"\n      }\c"
+                echo "[\n  {\n    hostname: \"$hostname\",\n    cve_list: [\n      {\n        cve_id: \"$cve\"\n        pkg_name: \"$pkgname\"\n        fixed_version: \"$fix\"\n      }\c"
+            elif [ $aux = $hostname ]; then
+                echo ",\n      {\n        cve_id: \"$cve\"\n        pkg_name: \"$pkgname\"\n        fixed_version: \"$fix\"\n      }\c"
             else
-                echo "\n    ],\n  {\n    hostname: \"$hostname\",\n    cve_list: [\n      {\n        cve_id: \"$cve\"\n        fixed_version: \"$fix\"\n      }\c"
+                echo "\n    ],\n  {\n    hostname: \"$hostname\",\n    cve_list: [\n      {\n        cve_id: \"$cve\"\n        pkg_name: \"$pkgname\"\n        fixed_version: \"$fix\"\n      }\c"
             fi ;;
             
     csv)    if [ -z "$aux" ]; then
-                echo "hostname,cve_id,fixed_version"
+                echo "hostname,cve_id,pkg_name,fixed_version"
             fi
-            echo "$hostname,$cve,$fix" ;;
+            echo "$hostname,$cve,$pkgname,$fix" ;;
             
     human)  if [ -z "$aux" ]; then
-              echo $a$b$c"|"
-              a="+";b="+";c="+"
+              echo $a$b$c$d"|"
+              a="+";b="+";c="+";d="+"
               a="${(r:$length_host+1:)a}";a=${a// /-}
               b="${(r:$length_cve+1:)b}";b=${b// /-}
-              c="${(r:$length_fix+1:)c}";c=${c// /-}
-              echo $a$b$c"+"
+              c="${(r:$length_pkg+1:)c}";c=${c// /-}
+              d="${(r:$length_fix+1:)d}";d=${d// /-}
+              echo $a$b$c$d"+"
             fi
             hostname="|${(r:$length_host:)hostname}"
             cve="|${(r:$length_cve:)cve}"
+            pkgname="|${(r:$length_pkg:)pkgname}"
             fix="|${(r:$length_fix:)fix}|"
-            echo $hostname$cve$fix ;;
+            echo $hostname$cve$pkgname$fix ;;
   esac
   aux=$hostname
+  previous=$key
 done
 [ $format = "json" ] && echo "\n    ]\n  }\n]"
 rm $temp 2>/dev/null
