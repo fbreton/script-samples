@@ -1,6 +1,6 @@
 # script-samples
 
-Those are script using Lacework CLI or REST API for the following:
+Those are scripts using Lacework CLI or REST API for the following:
 
 Script name | Description | Language 
 ------------|-------------|---------
