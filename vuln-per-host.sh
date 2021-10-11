@@ -7,6 +7,7 @@ Flags:
     -j | --json   json output format
     -c | --csv    csv output format
     -e | --extip  show only host with external Ip
+    -a | --active to only look about active packages
     -p  string    switch between profiles configured at ~/.lacework.toml
     -h | --help   help"
     exit 2
@@ -17,12 +18,14 @@ format="human"
 hostnamelist=()
 ExternalIp=0
 lwcmd="lacework"
+active=""
 
 while [ ! -z "$1" ]; do
   case "$1" in
     -j | --json)  [ $format = "human" ] && format="json" || usage; shift ;;
     -c | --csv)   [ $format = "human" ] && format="csv" || usage; shift ;;
-    -e | --extip) ExternalIp=1; shift ;;
+    -e | --extip)  ExternalIp=1; shift ;;
+    -a | --active) active="--active"; shift ;;
     -p) shift; profile=$1; lwcmd="lacework -p $1"; shift ;;
     -h | --help | -*)  usage ;;
     *) hostnamelist+=($1); shift ;;
@@ -42,7 +45,7 @@ length_cve=0
 length_fix=0
 output=""
 
-eval "$lwcmd vulnerability host list-cves --active --fixable --json" | {jq -r '.[] | select((.packages[].status == "Active") or (.packages[].status == "Reopened")) | .cve_id + " " + .packages[0].fixed_version' 2>$err} | while read cve fix
+eval "$lwcmd vulnerability host list-cves $active --fixable --json" | {jq -r '.[] | select((.packages[].status == "Active") or (.packages[].status == "Reopened")) | .cve_id + " " + .packages[0].fixed_version' 2>$err} | while read cve fix
 do
   eval "$lwcmd vulnerability host list-hosts $cve --online --json" | jq -r '.[] |.host.hostname + " " + .host.tags.ExternalIp' | while read hostname extip
     do
@@ -54,7 +57,7 @@ do
 done
 
 [ -s "$err" ] && {
-  eval "$lwcmd vulnerability host list-cves --active --fixable"
+  eval "$lwcmd vulnerability host list-cves $active --fixable"
   rm $err
   exit 1
 }
